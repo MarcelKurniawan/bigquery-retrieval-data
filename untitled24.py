@@ -71,8 +71,7 @@ def download_csv(df):
 def main():
     st.title("BigQuery Data Explorer")
     st.write("""
-    Aplikasi ini memungkinkan Anda untuk menarik data dari Google BigQuery berdasarkan parameter yang ditentukan 
-    dan mengekspornya ke dalam format CSV.
+    Google BigQuery.
     """)
 
     # Pilihan dataset dan tabel
