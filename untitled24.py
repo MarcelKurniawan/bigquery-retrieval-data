@@ -24,17 +24,23 @@ def run_bigquery_query(query):
         return None
 
 # Fungsi untuk membuat query
-def build_query(dataset, table, columns, filters=None, limit=None):
-    base_query = f"SELECT {', '.join(columns)} FROM `{dataset}.{table}`"
+def build_query(dataset, table, columns, filters=None, limit=None, distinct=False):
+    select_clause = "SELECT "
+    if distinct:
+        select_clause += "DISTINCT "
+    select_clause += f"{', '.join(columns)} FROM `{dataset}.{table}`"
+    base_query = select_clause
     
-    if filters:
+    if filters and len(filters) > 0:
         where_clauses = []
         for filter in filters:
             col = filter['column']
             operator = filter['operator']
             value = filter['value']
             
-            if pd.notna(value):
+            if operator in ["IS NULL", "IS NOT NULL"]:
+                where_clauses.append(f"{col} {operator}")
+            elif pd.notna(value):
                 if operator == "LIKE":
                     where_clauses.append(f"{col} LIKE '%{value}%'")
                 elif operator == "=":
@@ -57,7 +63,10 @@ def build_query(dataset, table, columns, filters=None, limit=None):
                     where_clauses.append(f"{col} <= {value}")
                 elif operator == "BETWEEN":
                     if isinstance(value, list) and len(value) == 2:
-                        where_clauses.append(f"{col} BETWEEN {value[0]} AND {value[1]}")
+                        if isinstance(value[0], date):
+                            where_clauses.append(f"{col} BETWEEN DATE '{value[0]}' AND DATE '{value[1]}'")
+                        else:
+                            where_clauses.append(f"{col} BETWEEN {value[0]} AND {value[1]}")
                 elif operator == "IN":
                     if isinstance(value, list):
                         if all(isinstance(x, str) for x in value):
@@ -65,10 +74,6 @@ def build_query(dataset, table, columns, filters=None, limit=None):
                         else:
                             values_str = ", ".join([str(x) for x in value])
                         where_clauses.append(f"{col} IN ({values_str})")
-                elif operator == "IS NULL":
-                    where_clauses.append(f"{col} IS NULL")
-                elif operator == "IS NOT NULL":
-                    where_clauses.append(f"{col} IS NOT NULL")
         
         if where_clauses:
             base_query += " WHERE " + " AND ".join(where_clauses)
@@ -198,16 +203,19 @@ def main():
     
     # Limit
     limit = st.number_input("Limit jumlah baris", min_value=1, value=1000)
+    
+    # Distinct
+    distinct = st.checkbox("Gunakan DISTINCT", value=False)
 
     # Filter
     st.header("Filter Data")
     
+    filters = []  # Inisialisasi variabel filters
     if columns_info is None:
         st.info("Klik 'Dapatkan Informasi Kolom' di sidebar terlebih dahulu")
     else:
         # Tambah filter
-        num_filters = st.number_input("Jumlah filter", min_value=0, max_value=10, value=1)
-        filters = []
+        num_filters = st.number_input("Jumlah filter", min_value=0, max_value=10, value=0)
         
         for i in range(num_filters):
             filters.append(create_filter_ui(columns_info, i))
@@ -218,7 +226,7 @@ def main():
             st.warning("Silakan masukkan setidaknya satu kolom untuk diambil")
             return
             
-        query = build_query(dataset, table, columns, filters if num_filters > 0 else None, limit)
+        query = build_query(dataset, table, columns, filters if num_filters > 0 else None, limit, distinct)
         
         st.subheader("Query yang dijalankan:")
         st.code(query, language="sql")
