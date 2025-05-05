@@ -25,10 +25,9 @@ def run_bigquery_query(query):
         
         # Menjalankan query
         query_job = client.query(query)
-        results = query_job.result()
         
-        # Mengkonversi ke DataFrame pandas
-        df = results.to_dataframe()
+        # Mengkonversi ke DataFrame pandas dengan batching untuk menghindari memory issues
+        df = query_job.to_dataframe(progress_bar_type=None)
         
         return df
     
