@@ -108,20 +108,20 @@ def main():
         
         limit = st.number_input("Limit jumlah baris", min_value=1, value=1000)
     
-    with col2:
-        st.write("Filter (opsional)")
-        filter_col1 = st.text_input("Kolom Filter 1")
-        filter_val1 = st.text_input("Nilai Filter 1")
+    # with col2:
+    #     st.write("Filter (opsional)")
+    #     filter_col1 = st.text_input("Kolom Filter 1")
+    #     filter_val1 = st.text_input("Nilai Filter 1")
         
-        filter_col2 = st.text_input("Kolom Filter 2")
-        filter_val2 = st.text_input("Nilai Filter 2")
+    #     filter_col2 = st.text_input("Kolom Filter 2")
+    #     filter_val2 = st.text_input("Nilai Filter 2")
         
-        # Membuat dictionary filter
-        filters = {}
-        if filter_col1 and filter_val1:
-            filters[filter_col1] = filter_val1
-        if filter_col2 and filter_val2:
-            filters[filter_col2] = filter_val2
+    #     # Membuat dictionary filter
+    #     filters = {}
+    #     if filter_col1 and filter_val1:
+    #         filters[filter_col1] = filter_val1
+    #     if filter_col2 and filter_val2:
+    #         filters[filter_col2] = filter_val2
 
     # Jalankan query
     if st.button("Jalankan Query"):
