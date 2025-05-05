@@ -3,9 +3,9 @@ from google.oauth2 import service_account
 from google.cloud import bigquery
 import pandas as pd
 import datetime
+from datetime import date
 
 # Konfigurasi kredensial
-# Create API client.
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
@@ -14,41 +14,62 @@ client = bigquery.Client(credentials=credentials)
 # Fungsi untuk menjalankan query
 def run_bigquery_query(query):
     try:
-        # Membuat credentials dari dictionary
         credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
-        
-        # Membuat client BigQuery
-        client = bigquery.Client(
-            credentials=credentials,
-            project=credentials.project_id,
-        )
-        
-        # Menjalankan query
+        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
         query_job = client.query(query)
-        
-        # Mengkonversi ke DataFrame pandas dengan batching untuk menghindari memory issues
         df = query_job.to_dataframe(progress_bar_type=None)
-        
         return df
-    
     except Exception as e:
         st.error(f"Error: {str(e)}")
         return None
 
-# Fungsi untuk membuat query berdasarkan parameter
+# Fungsi untuk membuat query
 def build_query(dataset, table, columns, filters=None, limit=None):
     base_query = f"SELECT {', '.join(columns)} FROM `{dataset}.{table}`"
     
     if filters:
         where_clauses = []
-        for col, val in filters.items():
-            if pd.notna(val):
-                if isinstance(val, str):
-                    where_clauses.append(f"{col} LIKE '%{val}%'")
-                elif isinstance(val, (int, float)):
-                    where_clauses.append(f"{col} = {val}")
-                elif isinstance(val, datetime.date):
-                    where_clauses.append(f"{col} = DATE '{val}'")
+        for filter in filters:
+            col = filter['column']
+            operator = filter['operator']
+            value = filter['value']
+            
+            if pd.notna(value):
+                if operator == "LIKE":
+                    where_clauses.append(f"{col} LIKE '%{value}%'")
+                elif operator == "=":
+                    if isinstance(value, str):
+                        where_clauses.append(f"{col} = '{value}'")
+                    else:
+                        where_clauses.append(f"{col} = {value}")
+                elif operator == "!=":
+                    if isinstance(value, str):
+                        where_clauses.append(f"{col} != '{value}'")
+                    else:
+                        where_clauses.append(f"{col} != {value}")
+                elif operator == ">":
+                    where_clauses.append(f"{col} > {value}")
+                elif operator == "<":
+                    where_clauses.append(f"{col} < {value}")
+                elif operator == ">=":
+                    where_clauses.append(f"{col} >= {value}")
+                elif operator == "<=":
+                    where_clauses.append(f"{col} <= {value}")
+                elif operator == "BETWEEN":
+                    if isinstance(value, list) and len(value) == 2:
+                        where_clauses.append(f"{col} BETWEEN {value[0]} AND {value[1]}")
+                elif operator == "IN":
+                    if isinstance(value, list):
+                        if all(isinstance(x, str) for x in value):
+                            values_str = ", ".join([f"'{x}'" for x in value])
+                        else:
+                            values_str = ", ".join([str(x) for x in value])
+                        where_clauses.append(f"{col} IN ({values_str})")
+                elif operator == "IS NULL":
+                    where_clauses.append(f"{col} IS NULL")
+                elif operator == "IS NOT NULL":
+                    where_clauses.append(f"{col} IS NOT NULL")
+        
         if where_clauses:
             base_query += " WHERE " + " AND ".join(where_clauses)
     
@@ -70,7 +91,7 @@ def get_column_info(dataset, table):
         st.error(f"Gagal mendapatkan informasi kolom: {str(e)}")
         return None
 
-# Fungsi untuk mengunduh DataFrame sebagai CSV
+# Fungsi untuk mengunduh data
 def download_csv(df):
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
@@ -80,14 +101,79 @@ def download_csv(df):
         mime='text/csv',
     )
 
-# Antarmuka Streamlit
+# UI untuk membuat filter
+def create_filter_ui(columns_info, filter_count):
+    st.subheader(f"Filter {filter_count + 1}")
+    col1, col2, col3 = st.columns([3, 2, 3])
+    
+    with col1:
+        column = st.selectbox(
+            "Kolom",
+            options=columns_info['column_name'].tolist(),
+            key=f"col_{filter_count}"
+        )
+    
+    with col2:
+        operator = st.selectbox(
+            "Operator",
+            options=["=", "!=", ">", "<", ">=", "<=", "LIKE", "BETWEEN", "IN", "IS NULL", "IS NOT NULL"],
+            key=f"op_{filter_count}"
+        )
+    
+    with col3:
+        col_type = columns_info[columns_info['column_name'] == column]['data_type'].values[0]
+        value = None
+        
+        if operator in ["IS NULL", "IS NOT NULL"]:
+            pass  # Tidak membutuhkan value
+        elif operator == "BETWEEN":
+            if col_type in ('INT64', 'NUMERIC', 'FLOAT64'):
+                min_val = st.number_input("Nilai minimum", key=f"min_{filter_count}")
+                max_val = st.number_input("Nilai maksimum", key=f"max_{filter_count}")
+                value = [min_val, max_val]
+            elif col_type in ('DATE', 'DATETIME', 'TIMESTAMP'):
+                min_date = st.date_input("Tanggal awal", key=f"min_date_{filter_count}")
+                max_date = st.date_input("Tanggal akhir", key=f"max_date_{filter_count}")
+                value = [min_date, max_date]
+        elif operator == "IN":
+            input_str = st.text_input("Nilai (pisahkan dengan koma)", key=f"in_{filter_count}")
+            if input_str:
+                if col_type in ('INT64', 'NUMERIC', 'FLOAT64'):
+                    value = [x.strip() for x in input_str.split(",")]
+                    try:
+                        value = [float(x) for x in value]
+                    except ValueError:
+                        st.error("Masukkan angka yang valid")
+                else:
+                    value = [x.strip() for x in input_str.split(",")]
+        else:
+            if col_type in ('INT64', 'NUMERIC', 'FLOAT64'):
+                value = st.number_input("Nilai", key=f"val_num_{filter_count}")
+            elif col_type in ('DATE', 'DATETIME', 'TIMESTAMP'):
+                value = st.date_input("Tanggal", key=f"val_date_{filter_count}")
+            elif col_type == 'BOOL':
+                value = st.selectbox(
+                    "Nilai",
+                    options=[True, False],
+                    key=f"val_bool_{filter_count}"
+                )
+            else:  # STRING
+                value = st.text_input("Nilai", key=f"val_str_{filter_count}")
+    
+    return {
+        'column': column,
+        'operator': operator,
+        'value': value
+    }
+
+# Antarmuka utama
 def main():
     st.title("BigQuery Data Explorer")
     st.write("""
-    Google BigQuery.
+    Aplikasi ini memungkinkan Anda untuk menarik data dari Google BigQuery dengan berbagai filter.
     """)
 
-    # Pilihan dataset dan tabel
+    # Konfigurasi koneksi
     st.sidebar.header("Konfigurasi Koneksi")
     dataset = st.sidebar.text_input("Nama Dataset", "bigquery-public-data.fcc_political_ads")
     table = st.sidebar.text_input("Nama Tabel", "broadcast_tv_radio_station")
@@ -100,47 +186,31 @@ def main():
             st.sidebar.write("Kolom yang tersedia:")
             st.sidebar.dataframe(columns_info)
 
-    # Parameter query
+    # Parameter query utama
     st.header("Parameter Query")
-    col1, col2 = st.columns(2)
     
-    with col1:
-        columns_input = st.text_area(
-            "Kolom yang ingin diambil (pisahkan dengan koma)", 
-            "station_id, facility_id, call_sign, community_city"
-        )
-        columns = [col.strip() for col in columns_input.split(",") if col.strip()]
-        
-        limit = st.number_input("Limit jumlah baris", min_value=1, value=1000)
+    # Kolom yang ingin diambil
+    columns_input = st.text_area(
+        "Kolom yang ingin diambil (pisahkan dengan koma)", 
+        "station_id, facility_id, call_sign, community_city"
+    )
+    columns = [col.strip() for col in columns_input.split(",") if col.strip()]
     
-    with col2:
-        st.write("Filter (opsional)")
+    # Limit
+    limit = st.number_input("Limit jumlah baris", min_value=1, value=1000)
+
+    # Filter
+    st.header("Filter Data")
+    
+    if columns_info is None:
+        st.info("Klik 'Dapatkan Informasi Kolom' di sidebar terlebih dahulu")
+    else:
+        # Tambah filter
+        num_filters = st.number_input("Jumlah filter", min_value=0, max_value=10, value=1)
+        filters = []
         
-        # Buat filter dinamis berdasarkan kolom yang tersedia
-        filters = {}
-        if columns_info is not None:
-            # Ambil 5 kolom pertama untuk filter (bisa disesuaikan)
-            filter_columns = columns_info['column_name'].head(5).tolist()
-            
-            for col in filter_columns:
-                col_type = columns_info[columns_info['column_name'] == col]['data_type'].values[0]
-                
-                if col_type in ('STRING', 'DATE', 'DATETIME', 'TIMESTAMP'):
-                    val = st.text_input(f"Nilai untuk {col} (teks)", key=f"filter_{col}")
-                    if val:
-                        filters[col] = val
-                elif col_type in ('INT64', 'NUMERIC', 'FLOAT64'):
-                    val = st.number_input(f"Nilai untuk {col} (angka)", key=f"filter_{col}")
-                    if val is not None:
-                        filters[col] = val
-                elif col_type == 'BOOL':
-                    val = st.selectbox(f"Nilai untuk {col} (boolean)", 
-                                      [None, 'True', 'False'], 
-                                      key=f"filter_{col}")
-                    if val:
-                        filters[col] = val == 'True'
-        else:
-            st.info("Klik 'Dapatkan Informasi Kolom' di sidebar untuk melihat daftar kolom yang tersedia")
+        for i in range(num_filters):
+            filters.append(create_filter_ui(columns_info, i))
 
     # Jalankan query
     if st.button("Jalankan Query"):
@@ -148,7 +218,7 @@ def main():
             st.warning("Silakan masukkan setidaknya satu kolom untuk diambil")
             return
             
-        query = build_query(dataset, table, columns, filters, limit)
+        query = build_query(dataset, table, columns, filters if num_filters > 0 else None, limit)
         
         st.subheader("Query yang dijalankan:")
         st.code(query, language="sql")
@@ -158,9 +228,9 @@ def main():
             
             if data is not None:
                 st.success(f"Berhasil mengambil {len(data)} baris data")
-                st.dataframe(data.head(1000))  # Batasi tampilan untuk menghindari overload
+                st.dataframe(data.head(1000))
                 
-                # Tampilkan tombol unduh
+                # Tombol unduh
                 download_csv(data)
 
 if __name__ == "__main__":
